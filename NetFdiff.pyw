@@ -359,7 +359,7 @@ class Ftp :
         remoteDirectory = os.path.normpath(dir)
 
         # create all necessary intermediate directories
-        dirList = remoteDirectory.split('/')
+        dirList = remoteDirectory.split(os.path.sep)
         while len(dirList) > 0 :
             dir = dirList.pop(0)
             # create the directory
@@ -408,7 +408,7 @@ class Ftp :
 
 
                 # proceed with the upload
-                ftpHandler.storbinary('STOR ' + remoteFile, open(localFile))
+                ftpHandler.storbinary('STOR ' + remoteFile, open(localFile, 'rb'))
     
                 if doQuit :
                     ftpHandler.quit()
@@ -627,6 +627,12 @@ class DiffFrame(Frame) :
             else :
                 self.remoteFilesForDiff.append(remoteFile)
                 self.localFilesForDiff.append('')
+
+        # remaining local files (> remote files)
+        for localFile in copyOflocalFiles :
+            self.remoteFilesForDiff.append('')
+            self.localFilesForDiff.append(localFile)
+
 
 
     def updateDisplay(self) :
