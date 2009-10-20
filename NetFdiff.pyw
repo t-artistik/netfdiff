@@ -8,10 +8,9 @@
 #    but they are hidden. so this is not coherent.
 
 # TODO list
-# several languages
 # add a search bar or filter bar.
+# hide/show hidden files (.files) -> impact on: applyFilter()
 # configuration with dialog box
-# create and upload remote php script
 # optimize creation of remote folders: do not create when not necessary
 # #
 
@@ -61,6 +60,9 @@ MESSAGES = [ [ 'en', 'fr' ],
 [   'Hide identical files',
     'Cacher les fichiers identiques' ],
 
+[   "Hide files beginning by '.'",
+    "Cacher les fichiers commencant par '.'" ],
+
 [   'Hide directories',
     'Cacher les dossiers' ],
 
@@ -76,8 +78,11 @@ MESSAGES = [ [ 'en', 'fr' ],
 [   'Cannot delete file:',
     'Echec de la suppression de fichier :' ],
 
-[   'Are you sure you want to delete this file ?\n%s',
-    'Supprimer le fichier ?\n%s' ],
+[   'No remote file selected.',
+    'Aucun fichier distant selectionne.' ],
+
+[   'Are you sure you want to delete the selected files ?',
+    'Supprimer les fichiers selectionnes ?' ],
 
 [   'Delete a file',
     'Supprimer un fichier' ],
@@ -145,8 +150,8 @@ MESSAGES = [ [ 'en', 'fr' ],
 [   "Click on 'Update' in order to display the lists.",
     "Clicker sur 'Actualiser' pour afficher les listes." ],
 
-[   '',
-    '' ],
+[   'Files uploaded: %d',
+    'Fichiers envoyes : %d' ],
 
 [   '',
     '' ],
@@ -443,6 +448,7 @@ class List(Frame) :
 
         self.title = Label(self, text=name)
         self.title.pack(side=TOP)
+        self.title.config(takefocus=1)
 
         # listbox
         self.list = Listbox(self, selectmode=EXTENDED)
@@ -456,31 +462,45 @@ class List(Frame) :
             # contextual menu
             self.contextualMenu = Menu(self, tearoff=0)
             self.contextualMenu.add_command(label=_('Rename'), command=self.renameFile)
-            self.contextualMenu.add_command(label=_('Delete'), command=self.deleteFile)
+            self.contextualMenu.add_command(label=_('Delete'), command=self.deleteRemoteFiles)
 
-    def deleteFile(self) :
-        "Delete the selected file."
+    def deleteRemoteFilesBinding(self, event) :
+        self.deleteRemoteFiles()
+
+    def deleteRemoteFiles(self) :
+        "Delete the selected files."
+
         currentSelection = self.list.curselection()
-        if len(currentSelection) == 1 :
-            currentFile = self.list.get(self.list.curselection()[0])
+        if len(currentSelection) == 0 :
+            log(_('No remote file selected.'))
+            return
+        
+        msg = _('Are you sure you want to delete the selected files ?')
+        confirm = tkMessageBox.askokcancel(_('Delete a file'), msg, default=tkMessageBox.CANCEL)
+        if not confirm :
+            log(_('Cancelled.'))
+            return
 
-            msg = _('Are you sure you want to delete this file ?\n%s') % currentFile
-            confirm = tkMessageBox.askokcancel(_('Delete a file'), msg, default=tkMessageBox.CANCEL)
-            if confirm :
-                Ftp.delete(currentFile)
-                if not Ftp.errorOccurred :
-                    # update the display
-                    diffFrame.readRemoteFiles()
-                    diffFrame.updateDisplay()
+        # sort the files so that the directories are deleted last
+        files = []
+        for selectedFile in currentSelection :
+            currentFile = self.list.get(selectedFile)
+            files.append(currentFile)
+
+        files.sort(None, None, True)
+
+        for file in files :
+
+            Ftp.delete(file)
+            if Ftp.errorOccurred :
+                # quit the loop if any error
+                break
+
+        if not Ftp.errorOccurred :
+            # update the display
+            diffFrame.readRemoteFiles()
+            diffFrame.updateDisplay()
                     
-            else :
-                log(_('Cancelled.'))
-
-
-        else :
-            # renaming several files is not supported
-            log(_('Cannot delete more than 1 file at a time.'))
-
     def renameFile(self) :
         currentSelection = self.list.curselection()
         if len(currentSelection) == 1 :
@@ -529,14 +549,19 @@ def applyFilter(filepath) :
 
     if filepath == '' : return False
 
-    # hide files beginning with '.'
-    s1 = re.search('/\.', filepath)
-    if s1 is not None :
-        return True
 
     #s1 = re.search('^\./\.', os.path.basename(filename))
     #if s1 is not None :
     #   return True
+
+def isDotFile(filepath) :
+    """Detect files begninning by a dot (/my/path/.htaccess)"""
+
+    if filepath == '' : return False
+
+    s1 = re.search('/\.', filepath)
+    if s1 is not None :
+        return True
 
 
 class DiffFrame(Frame) :
@@ -545,6 +570,7 @@ class DiffFrame(Frame) :
     showOnlyDiff = 0
     showRedOnly = 0 # recent files are "Red"
     dontShowDirectories = 0
+    hideDotFiles = False
     recentLocalFiles = []
     remoteFiles = []
     localFiles = []
@@ -608,6 +634,7 @@ class DiffFrame(Frame) :
     def makeDiff(self) :
         "Make a diff between local and remote files."
 
+        #log('makeDiff...')
         self.remoteFilesForDiff = []
         self.localFilesForDiff = []
         copyOflocalFiles = self.localFiles[:]
@@ -642,6 +669,7 @@ class DiffFrame(Frame) :
         self.localList.list.delete(0, END)
 
         # both list are supposed to be synchronised (same number of elements)
+        #log("populating lists to be displayed...")
         L = len(self.localFilesForDiff)
         i = 0
         while i < L :
@@ -653,17 +681,25 @@ class DiffFrame(Frame) :
             # check filters to see if it shall be hidden
             if self.showOnlyDiff and remoteFile != '' and localFile != '' :
                 hide = True
+                continue
 
             if self.dontShowDirectories and \
                ( (len(remoteFile)>0 and remoteFile[-1] == '/') \
                or (len(localFile)>0 and localFile[-1] == '/') ) :
                 hide = True
+                continue
 
+            if self.hideDotFiles and ( isDotFile(localFile) or isDotFile(remoteFile) ) :
+                hide = True
+                continue
+            
             if self.showRedOnly and not localFile in self.recentLocalFiles :
                 hide = True
+                continue
             
             if applyFilter(localFile) or applyFilter(remoteFile) :
                 hide = True
+                continue
 
             if not hide :
                 # do display
@@ -676,6 +712,10 @@ class DiffFrame(Frame) :
             
     def toggleShowDiffOnly(self) :
         self.showOnlyDiff = 1 - self.showOnlyDiff
+        self.updateDisplay()
+
+    def toggleHideDotFiles(self) :
+        self.hideDotFiles = not self.hideDotFiles
         self.updateDisplay()
 
     def toggleDontShowDirectories(self) :
@@ -814,20 +854,25 @@ def uploadFiles() :
     "Upload the files selected in the local list."
     list = diffFrame.localList.list
     selection = list.curselection()
+    numberUploadedFiles = 0
     if len(selection) > 0 :
         ftpHandler = Ftp.connect()
         if ftpHandler is not None :
             for index in selection :
                 file = list.get(index)
     
-                if file != '' :
+                if file != '' and file[-1] != '/' : # do not upload directories
                     Ftp.upload(file, ftpHandler)
+                    numberUploadedFiles = numberUploadedFiles + 1
 
             ftpHandler.quit()
 
-        # update the display
-        diffFrame.readRemoteFiles()
-        diffFrame.updateDisplay()
+        log(_('Files uploaded: %d') % numberUploadedFiles)
+
+        if numberUploadedFiles > 0 :
+            # update the display
+            diffFrame.readRemoteFiles()
+            diffFrame.updateDisplay()
 
     else :
         # no file selected
@@ -933,6 +978,7 @@ n = 0
 root.bind("<Control-Q>", quit)
 root.bind("<Control-q>", quit)
 
+
 # build the menu bar
 menubar = Menu(root)
 
@@ -975,11 +1021,13 @@ panedWindow = PanedWindow(orient=VERTICAL)
 panedWindow.pack(fill=BOTH, expand=1)
 
 diffFrame = DiffFrame(panedWindow)
+root.bind('<Delete>', diffFrame.remoteList.deleteRemoteFilesBinding)
 panedWindow.add(diffFrame)
 
 display_menu.add_checkbutton(label=_('Hide identical files'), command=diffFrame.toggleShowDiffOnly)
 
 display_menu.add_checkbutton(label=_('Hide directories'), command=diffFrame.toggleDontShowDirectories)
+display_menu.add_checkbutton(label=_("Hide files beginning by '.'"), command=diffFrame.toggleHideDotFiles)
 
 display_menu.add_checkbutton(label=_('Display only recent files'), command=diffFrame.toggleShowRedOnly)
 
